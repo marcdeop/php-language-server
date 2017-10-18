@@ -284,6 +284,8 @@ class LanguageServer extends AdvancedJsonRpc\Dispatcher
             $serverCapabilities->xworkspaceReferencesProvider = true;
             $serverCapabilities->xdefinitionProvider = true;
             $serverCapabilities->xdependenciesProvider = true;
+            // Support "Rename"
+            $serverCapabilities->renameProvider = true;
 
             return new InitializeResult($serverCapabilities);
         });

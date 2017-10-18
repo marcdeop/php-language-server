@@ -18,10 +18,13 @@ use LanguageServer\Protocol\{
     SymbolDescriptor,
     PackageDescriptor,
     SymbolLocationInformation,
+    TextEdit,
+    TextDocumentEdit,
     TextDocumentIdentifier,
     TextDocumentItem,
     VersionedTextDocumentIdentifier,
-    CompletionContext
+    CompletionContext,
+    WorkspaceEdit
 };
 use Microsoft\PhpParser;
 use Microsoft\PhpParser\Node;
@@ -344,6 +347,84 @@ class TextDocument
                 $contents[] = $def->documentation;
             }
             return new Hover($contents, $range);
+        });
+    }
+
+    /**
+     * The rename request is sent from the client to the server to perform a workspace-wide rename of a symbol.
+     *
+     * @param TextDocumentIdentifier $textDocument The document to format.
+     * @param Position               $position     The position at which this request was sent.
+     * @param string                 $newName      The new name of the symbol.
+     * @return Promise <WorkspaceEdit>
+     */
+    public function rename(TextDocumentIdentifier $textDocument, Position $position, string $newName): Promise
+    {
+        return coroutine(function () use ($textDocument, $position, $newName) {
+            $document = yield $this->documentLoader->getOrLoad($textDocument->uri);
+            $node = $document->getNodeAtPosition($position);
+            if ($node === null) {
+                return [];
+            }
+            $locations = [];
+            // Variables always stay in the boundary of the file and need to be searched inside their function scope
+            // by traversing the AST
+            if (
+
+            ($node instanceof Node\Expression\Variable && !($node->getParent()->getParent() instanceof Node\PropertyDeclaration))
+                || $node instanceof Node\Parameter
+                || $node instanceof Node\UseVariableName
+            ) {
+                if (isset($node->name) && $node->name instanceof Node\Expression) {
+                    return null;
+                }
+                // Find function/method/closure scope
+                $n = $node;
+
+                $n = $n->getFirstAncestor(Node\Statement\FunctionDeclaration::class, Node\MethodDeclaration::class, Node\Expression\AnonymousFunctionCreationExpression::class, Node\SourceFileNode::class);
+
+                if ($n === null) {
+                    $n = $node->getFirstAncestor(Node\Statement\ExpressionStatement::class)->getParent();
+                }
+
+                foreach ($n->getDescendantNodes() as $descendantNode) {
+                    if ($descendantNode instanceof Node\Expression\Variable &&
+                        $descendantNode->getName() === $node->getName()
+                    ) {
+                        $locations[] = Location::fromNode($descendantNode);
+                    }
+                }
+            } else {
+                // Definition with a global FQN
+                $fqn = DefinitionResolver::getDefinedFqn($node);
+
+                // Wait until indexing finished
+                if (!$this->index->isComplete()) {
+                    yield waitForEvent($this->index, 'complete');
+                }
+                if ($fqn === null) {
+                    $fqn = $this->definitionResolver->resolveReferenceNodeToFqn($node);
+                    if ($fqn === null) {
+                        return [];
+                    }
+                }
+                $refDocuments = yield Promise\all(array_map(
+                    [$this->documentLoader, 'getOrLoad'],
+                    $this->index->getReferenceUris($fqn)
+                ));
+                foreach ($refDocuments as $document) {
+                    $refs = $document->getReferenceNodesByFqn($fqn);
+                    if ($refs !== null) {
+                        foreach ($refs as $ref) {
+                            $locations[] = Location::fromNode($ref);
+                        }
+                    }
+                }
+            }
+            foreach ($locations as $location) {
+                $changes[$location->uri][] = new TextEdit($location->range, $newName);
+            }
+            return new WorkspaceEdit($changes, null);
         });
     }
 
