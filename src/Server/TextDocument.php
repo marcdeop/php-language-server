@@ -173,7 +173,9 @@ class TextDocument
      * The references request is sent from the client to the server to resolve project-wide references for the symbol
      * denoted by the given text document position.
      *
-     * @param ReferenceContext $context
+     * @param  ReferenceContext       $context
+     * @param  TextDocumentIdentifier $textDocument
+     * @param  Position               $position
      * @return Promise <Location[]>
      */
     public function references(
